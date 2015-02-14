@@ -1932,6 +1932,44 @@ describe "TextEditorPresenter", ->
 
     xit "works correctly for a particular stream of random actions", ->
       performSetup()
+
+      presenter.setExplicitHeight(16)
+      presenterParams.horizontalScrollbarHeight = 12
+      presenter.setHorizontalScrollbarHeight(12)
+      presenter.setScrollTop(0)
+      presenterParams.verticalScrollbarWidth = 14
+      presenter.setVerticalScrollbarWidth(14)
+      presenterParams.scrollLeft = 8
+      presenter.setScrollLeft(8)
+      presenterParams.baseCharacterWidth = 11
+      presenter.setBaseCharacterWidth(11)
+      presenterParams.lineHeight = 5
+      presenter.setLineHeight(5)
+      presenterParams.contentFrameWidth = 271
+      presenter.setContentFrameWidth(271)
+      editor.addSelectionForBufferRange([[0,0],[0,0]])
+      cursor = editor.getCursors()[0]
+      cursor.selection.clear()
+      cursor.setBufferPosition([0,0])
+      editor.addCursorAtBufferPosition([0,0])
+      presenter.setScrollTop(0)
+      editor.setSoftWrapped(true)
+      editor.setSoftWrapped(false)
+      editor.setSoftWrapped(true)
+      editor.setSoftWrapped(false)
+      editor.addSelectionForBufferRange([[0,0],[0,0]])
+      cursor = editor.getCursors()[0]
+      cursor.selection.clear()
+      cursor.setBufferPosition([0,0])
+      editor.setTextInBufferRange([[0,0],[0,0]], "\nshade dear\nsilence tea zero\ntail laid glad\njoined\nimportance so\nfun frog contrast orbit type")
+      presenter.setScrollTop(7)
+      editor.setSoftWrapped(true)
+      editor.getSelections()[0].setBufferRange([[0,0],[3,0]])
+      cursor = editor.getCursors()[0]
+      cursor.selection.clear()
+      cursor.setBufferPosition([6,5])
+      editor.setTextInBufferRange([[1,9],[5,2]], "\nask cover edge require farm definition shake quite feed definition height paragraph national dollar\nstudent please broke music hall represent condition cutting try sharp process pass lie ruler realize beat\n\npartly nuts")
+
       # paste output from failing spec here
       expectValidState()
       performTeardown()
