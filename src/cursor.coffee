@@ -288,7 +288,7 @@ class Cursor extends Model
       { row, column } = @getScreenPosition()
 
     column = @goalColumn if @goalColumn?
-    @setScreenPosition({row: row + rowCount, column: column})
+    @setScreenPosition({row: row + rowCount, column: column}, wrapAtSoftNewlines: true)
     @goalColumn = column
 
   # Public: Moves the cursor left one screen column.
@@ -311,7 +311,7 @@ class Cursor extends Model
         columnCount-- # subtract 1 for the row move
 
       column = column - columnCount
-      @setScreenPosition({row, column}, wrapAtSoftNewlines: originalRow == row)
+      @setScreenPosition({row, column})
 
   # Public: Moves the cursor right one screen column.
   #
@@ -360,19 +360,21 @@ class Cursor extends Model
   # line.
   moveToFirstCharacterOfLine: ->
     screenRow = @getScreenRow()
-    lineBufferRange = @editor.bufferRangeForScreenRange([[screenRow, 0], [screenRow, Infinity]])
+    screenLineStart = @editor.clipScreenPosition([screenRow, 0], wrapAtSoftNewlines: true)
+    screenLineEnd = [screenRow, Infinity]
+    screenLineBufferRange = @editor.bufferRangeForScreenRange([screenLineStart, screenLineEnd])
 
     firstCharacterColumn = null
-    @editor.scanInBufferRange /\S/, lineBufferRange, ({range, stop}) ->
+    @editor.scanInBufferRange /\S/, screenLineBufferRange, ({range, stop}) ->
       firstCharacterColumn = range.start.column
       stop()
 
     if firstCharacterColumn? and firstCharacterColumn isnt @getBufferColumn()
       targetBufferColumn = firstCharacterColumn
     else
-      targetBufferColumn = lineBufferRange.start.column
+      targetBufferColumn = screenLineBufferRange.start.column
 
-    @setBufferPosition([lineBufferRange.start.row, targetBufferColumn])
+    @setBufferPosition([screenLineBufferRange.start.row, targetBufferColumn])
 
   # Public: Moves the cursor to the end of the line.
   moveToEndOfScreenLine: ->

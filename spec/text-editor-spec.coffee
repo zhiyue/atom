@@ -287,7 +287,7 @@ describe "TextEditor", ->
 
         it "positions the cursor at the buffer position that corresponds to the given screen position", ->
           editor.setCursorScreenPosition([9, 0])
-          expect(editor.getCursorBufferPosition()).toEqual [8, 11]
+          expect(editor.getCursorBufferPosition()).toEqual [8, 10]
 
     describe ".moveUp()", ->
       it "moves the cursor up", ->
@@ -374,6 +374,16 @@ describe "TextEditor", ->
           editor.moveDown()
           editor.moveUp()
           expect(editor.getCursorScreenPosition().column).toBe 0
+
+      describe "when the cursor is at the beginning of an indented soft-wrapped line", ->
+        it "moves to the beginning of the line's continuation on the next screen row", ->
+          editor.setSoftWrapped(true)
+          editor.setEditorWidthInChars(50)
+          editor.logScreenLines()
+
+          editor.setCursorScreenPosition([3, 0])
+          editor.moveDown()
+          expect(editor.getCursorScreenPosition()).toEqual [4, 4]
 
       describe "when there is a selection", ->
         beforeEach ->
