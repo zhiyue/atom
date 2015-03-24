@@ -8,6 +8,7 @@ Q = require 'q'
 {Emitter} = require 'event-kit'
 Serializable = require 'serializable'
 TextBuffer = require 'text-buffer'
+{TextDocument} = require 'text-document'
 Grim = require 'grim'
 
 DefaultDirectoryProvider = require './default-directory-provider'
@@ -364,7 +365,7 @@ class Project extends Model
 
   # Still needed when deserializing a tokenized buffer
   buildBufferSync: (absoluteFilePath) ->
-    buffer = new TextBuffer({filePath: absoluteFilePath})
+    buffer = new TextDocument({filePath: absoluteFilePath})
     @addBuffer(buffer)
     buffer.loadSync()
     buffer
@@ -381,7 +382,8 @@ class Project extends Model
       error.code = 'EFILETOOLARGE'
       throw error
 
-    buffer = new TextBuffer({filePath: absoluteFilePath})
+    buffer = new TextDocument({filePath: absoluteFilePath})
+
     @addBuffer(buffer)
     buffer.load()
       .then((buffer) -> buffer)

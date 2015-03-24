@@ -2,7 +2,7 @@
 {View, $, callRemoveHooks} = require 'space-pen'
 Path = require 'path'
 {defaults} = require 'underscore-plus'
-TextBuffer = require 'text-buffer'
+{TextDocument} = require "text-document"
 Grim = require 'grim'
 TextEditor = require './text-editor'
 TextEditorComponent = require './text-editor-component'
@@ -95,7 +95,7 @@ class TextEditorElement extends HTMLElement
 
   buildModel: ->
     @setModel(new TextEditor(
-      buffer: new TextBuffer(@textContent)
+      buffer: new TextDocument(@textContent)
       softWrapped: false
       tabLength: 2
       softTabs: true

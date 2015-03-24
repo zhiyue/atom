@@ -4,6 +4,7 @@ Serializable = require 'serializable'
 Delegator = require 'delegato'
 {includeDeprecatedAPIs, deprecate} = require 'grim'
 {CompositeDisposable, Emitter} = require 'event-kit'
+{TextDocument} = require 'text-document'
 {Point, Range} = TextBuffer = require 'text-buffer'
 LanguageMode = require './language-mode'
 DisplayBuffer = require './display-buffer'
@@ -83,7 +84,7 @@ class TextEditor extends Model
     @cursors = []
     @selections = []
 
-    buffer ?= new TextBuffer
+    buffer ?= new TextDocument
     @displayBuffer ?= new DisplayBuffer({buffer, tabLength, softWrapped})
     @buffer = @displayBuffer.buffer
     @softTabs = @usesSoftTabs() ? @softTabs ? atom.config.get('editor.softTabs') ? true
