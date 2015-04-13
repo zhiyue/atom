@@ -1,6 +1,4 @@
-{$} = require './space-pen-extensions'
 _ = require 'underscore-plus'
-remote = require 'remote'
 path = require 'path'
 CSON = require 'season'
 fs = require 'fs-plus'
@@ -10,6 +8,7 @@ Grim = require 'grim'
 MenuHelpers = require './menu-helpers'
 {validateSelector} = require './selector-validator'
 
+platformContextMenu = require('../package.json')?._atomMenu?['context-menu']
 SpecificityCache = {}
 
 # Extended: Provides a registry for commands that you'd like to appear in the
@@ -51,10 +50,13 @@ class ContextMenuManager
     atom.keymaps.onDidLoadBundledKeymaps => @loadPlatformItems()
 
   loadPlatformItems: ->
-    menusDirPath = path.join(@resourcePath, 'menus')
-    platformMenuPath = fs.resolve(menusDirPath, process.platform, ['cson', 'json'])
-    map = CSON.readFileSync(platformMenuPath)
-    atom.contextMenu.add(map['context-menu'])
+    if platformContextMenu?
+      @add(platformContextMenu)
+    else
+      menusDirPath = path.join(@resourcePath, 'menus')
+      platformMenuPath = fs.resolve(menusDirPath, process.platform, ['cson', 'json'])
+      map = CSON.readFileSync(platformMenuPath)
+      @add(map['context-menu'])
 
   # Public: Add context menu items scoped by CSS selectors.
   #
@@ -101,25 +103,26 @@ class ContextMenuManager
   #     with the following argument:
   #     * `event` The click event that deployed the context menu.
   add: (itemsBySelector) ->
-    # Detect deprecated file path as first argument
-    if itemsBySelector? and typeof itemsBySelector isnt 'object'
-      Grim.deprecate """
-        ContextMenuManager::add has changed to take a single object as its
-        argument. Please see
-        https://atom.io/docs/api/latest/ContextMenuManager for more info.
-      """
-      itemsBySelector = arguments[1]
-      devMode = arguments[2]?.devMode
-
-    # Detect deprecated format for items object
-    for key, value of itemsBySelector
-      unless _.isArray(value)
+    if Grim.includeDeprecatedAPIs
+      # Detect deprecated file path as first argument
+      if itemsBySelector? and typeof itemsBySelector isnt 'object'
         Grim.deprecate """
           ContextMenuManager::add has changed to take a single object as its
           argument. Please see
           https://atom.io/docs/api/latest/ContextMenuManager for more info.
         """
-        itemsBySelector = @convertLegacyItemsBySelector(itemsBySelector, devMode)
+        itemsBySelector = arguments[1]
+        devMode = arguments[2]?.devMode
+
+      # Detect deprecated format for items object
+      for key, value of itemsBySelector
+        unless _.isArray(value)
+          Grim.deprecate """
+            ContextMenuManager::add has changed to take a single object as its
+            argument. Please see
+            https://atom.io/docs/api/latest/ContextMenuManager for more info.
+          """
+          itemsBySelector = @convertLegacyItemsBySelector(itemsBySelector, devMode)
 
     addedItemSets = []
 
@@ -132,6 +135,7 @@ class ContextMenuManager
     new Disposable =>
       for itemSet in addedItemSets
         @itemSets.splice(@itemSets.indexOf(itemSet), 1)
+      return
 
   templateForElement: (target) ->
     @templateForEvent({target})
@@ -187,7 +191,7 @@ class ContextMenuManager
     menuTemplate = @templateForEvent(event)
 
     return unless menuTemplate?.length > 0
-    remote.getCurrentWindow().emit('context-menu', menuTemplate)
+    atom.getCurrentWindow().emit('context-menu', menuTemplate)
     return
 
   clear: ->

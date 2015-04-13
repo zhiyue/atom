@@ -1,14 +1,10 @@
 {Range} = require 'text-buffer'
 _ = require 'underscore-plus'
 {OnigRegExp} = require 'oniguruma'
-{Emitter, Subscriber} = require 'emissary'
 ScopeDescriptor = require './scope-descriptor'
 
 module.exports =
 class LanguageMode
-  Emitter.includeInto(this)
-  Subscriber.includeInto(this)
-
   # Sets up a `LanguageMode` for the given {TextEditor}.
   #
   # editor - The {TextEditor} to associate with
@@ -16,7 +12,6 @@ class LanguageMode
     {@buffer} = @editor
 
   destroy: ->
-    @unsubscribe()
 
   toggleLineCommentForBufferRow: (row) ->
     @toggleLineCommentsForBufferRows(row, row)
@@ -104,11 +99,13 @@ class LanguageMode
       [startRow, endRow] = @rowRangeForFoldAtBufferRow(currentRow) ? []
       continue unless startRow?
       @editor.createFold(startRow, endRow)
+    return
 
   # Unfolds all the foldable lines in the buffer.
   unfoldAll: ->
     for row in [@buffer.getLastRow()..0]
       fold.destroy() for fold in @editor.displayBuffer.foldsStartingAtBufferRow(row)
+    return
 
   # Fold all comment and code blocks at a given indentLevel
   #
@@ -120,8 +117,9 @@ class LanguageMode
       continue unless startRow?
 
       # assumption: startRow will always be the min indent level for the entire range
-      if @editor.indentationForBufferRow(startRow) == indentLevel
+      if @editor.indentationForBufferRow(startRow) is indentLevel
         @editor.createFold(startRow, endRow)
+    return
 
   # Given a buffer row, creates a fold at it.
   #
@@ -175,7 +173,7 @@ class LanguageMode
       continue if @editor.isBufferRowBlank(row)
       indentation = @editor.indentationForBufferRow(row)
       if indentation <= startIndentLevel
-        includeRowInFold = indentation == startIndentLevel and @foldEndRegexForScopeDescriptor(scopeDescriptor)?.searchSync(@editor.lineTextForBufferRow(row))
+        includeRowInFold = indentation is startIndentLevel and @foldEndRegexForScopeDescriptor(scopeDescriptor)?.searchSync(@editor.lineTextForBufferRow(row))
         foldEndRow = row if includeRowInFold
         break
 
@@ -208,14 +206,14 @@ class LanguageMode
 
     startRow = bufferRow
     while startRow > firstRow
-      break if @isLineCommentedAtBufferRow(startRow - 1) != isOriginalRowComment
+      break if @isLineCommentedAtBufferRow(startRow - 1) isnt isOriginalRowComment
       break unless /\w/.test(@editor.lineTextForBufferRow(startRow - 1))
       startRow--
 
     endRow = bufferRow
     lastRow = @editor.getLastBufferRow()
     while endRow < lastRow
-      break if @isLineCommentedAtBufferRow(endRow + 1) != isOriginalRowComment
+      break if @isLineCommentedAtBufferRow(endRow + 1) isnt isOriginalRowComment
       break unless /\w/.test(@editor.lineTextForBufferRow(endRow + 1))
       endRow++
 
@@ -276,6 +274,7 @@ class LanguageMode
   # endRow - The row {Number} to end at
   autoIndentBufferRows: (startRow, endRow) ->
     @autoIndentBufferRow(row) for row in [startRow..endRow]
+    return
 
   # Given a buffer row, this indents it.
   #
