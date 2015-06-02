@@ -948,12 +948,8 @@ describe "Workspace", ->
             numPathsSearchedInDir2 = 1
             numPathsToPretendToSearchInCustomDirectorySearcher = 10
             class CustomDirectorySearch
-              constructor: ->
+              constructor: (delegate) ->
                 @promise = Promise.resolve()
-              then: (args...) ->
-                @promise.then.apply(@promise, args)
-              onDidMatch: (callback) ->
-                # Invoke the callback with the only result we plan to return.
                 searchResult1 =
                   filePath: foreignFilePath,
                   matches: [
@@ -962,22 +958,18 @@ describe "Workspace", ->
                       lineTextOffset: 0,
                       matchText: 'Hello',
                       range: [[0, 0], [0, 5]],
-                    }
+                    },
                   ]
-                callback(searchResult1)
-                new Disposable
-              onDidError: (callback) ->
-                new Disposable
-              onDidSearchPaths: (callback) ->
-                # Invoke the callback with the one notification we plan to send.
-                callback(numPathsToPretendToSearchInCustomDirectorySearcher)
-                new Disposable
+                delegate.onDidMatch(searchResult1)
+                delegate.onDidSearchPaths(numPathsToPretendToSearchInCustomDirectorySearcher)
+              then: (args...) ->
+                @promise.then.apply(@promise, args)
               cancel: ->
 
             class CustomDirectorySearcher
               canSearchDirectory: (directory) -> directory.getPath() is dir1
-              search: (directory, options) ->
-                new CustomDirectorySearch
+              search: (directory, delegate, options) ->
+                new CustomDirectorySearch(delegate)
 
             atom.packages.serviceHub.provide(
               "atom.directory-searcher", "0.1.0", new CustomDirectorySearcher())
@@ -1007,12 +999,6 @@ describe "Workspace", ->
                 customDirectorySearcherPromiseInstance = this
               then: (args...) ->
                 @promise.then.apply(@promise, args)
-              onDidMatch: (callback) ->
-                new Disposable
-              onDidError: (callback) ->
-                new Disposable
-              onDidSearchPaths: (callback) ->
-                new Disposable
               cancel: ->
                 @hoistedReject()
 
