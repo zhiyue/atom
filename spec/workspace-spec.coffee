@@ -948,7 +948,7 @@ describe "Workspace", ->
             numPathsSearchedInDir2 = 1
             numPathsToPretendToSearchInCustomDirectorySearcher = 10
             class CustomDirectorySearch
-              constructor: () ->
+              constructor: ->
                 @promise = Promise.resolve()
               then: (args...) ->
                 @promise.then.apply(@promise, args)
@@ -1000,7 +1000,7 @@ describe "Workspace", ->
           it "can be cancelled by cancelling one of the DirectorySearchers", ->
             customDirectorySearcherPromiseInstance = null
             class CustomDirectorySearchToCancel
-              constructor: () ->
+              constructor: ->
                 # Note that hoisting reject in this way is generally frowned upon.
                 @promise = new Promise (resolve, reject) =>
                   @hoistedReject = reject
