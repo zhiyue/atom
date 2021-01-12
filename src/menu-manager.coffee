@@ -1,7 +1,7 @@
 path = require 'path'
 
 _ = require 'underscore-plus'
-ipc = require 'ipc'
+{ipcRenderer} = require 'electron'
 CSON = require 'season'
 fs = require 'fs-plus'
 {Disposable} = require 'event-kit'
@@ -59,12 +59,17 @@ platformMenu = require('../package.json')?._atomMenu?.menu
 # See {::add} for more info about adding menu's directly.
 module.exports =
 class MenuManager
-  constructor: ({@resourcePath}) ->
+  constructor: ({@resourcePath, @keymapManager, @packageManager}) ->
+    @initialized = false
     @pendingUpdateOperation = null
     @template = []
-    atom.keymaps.onDidLoadBundledKeymaps => @loadPlatformItems()
-    atom.keymaps.onDidReloadKeymap => @update()
-    atom.packages.onDidActivateInitialPackages => @sortPackagesMenu()
+    @keymapManager.onDidLoadBundledKeymaps => @loadPlatformItems()
+    @packageManager.onDidActivateInitialPackages => @sortPackagesMenu()
+
+  initialize: ({@resourcePath}) ->
+    @keymapManager.onDidReloadKeymap => @update()
+    @update()
+    @initialized = true
 
   # Public: Adds the given items to the application menu.
   #
@@ -88,12 +93,20 @@ class MenuManager
   # added menu items.
   add: (items) ->
     items = _.deepClone(items)
-    @merge(@template, item) for item in items
+
+    for item in items
+      continue unless item.label? # TODO: Should we emit a warning here?
+      @merge(@template, item)
+
     @update()
     new Disposable => @remove(items)
 
   remove: (items) ->
     @unmerge(@template, item) for item in items
+    @update()
+
+  clear: ->
+    @template = []
     @update()
 
   # Should the binding for the given selector be included in the menu
@@ -138,22 +151,27 @@ class MenuManager
 
   # Public: Refreshes the currently visible menu.
   update: ->
-    clearImmediate(@pendingUpdateOperation) if @pendingUpdateOperation?
-    @pendingUpdateOperation = setImmediate =>
-      includedBindings = []
-      unsetKeystrokes = new Set
+    return unless @initialized
 
-      for binding in atom.keymaps.getKeyBindings() when @includeSelector(binding.selector)
-        includedBindings.push(binding)
+    clearTimeout(@pendingUpdateOperation) if @pendingUpdateOperation?
+
+    @pendingUpdateOperation = setTimeout(=>
+      unsetKeystrokes = new Set
+      for binding in @keymapManager.getKeyBindings()
         if binding.command is 'unset!'
           unsetKeystrokes.add(binding.keystrokes)
 
       keystrokesByCommand = {}
-      for binding in includedBindings when not unsetKeystrokes.has(binding.keystrokes)
+      for binding in @keymapManager.getKeyBindings()
+        continue unless @includeSelector(binding.selector)
+        continue if unsetKeystrokes.has(binding.keystrokes)
+        continue if process.platform is 'darwin' and /^alt-(shift-)?.$/.test(binding.keystrokes)
+        continue if process.platform is 'win32' and /^ctrl-alt-(shift-)?.$/.test(binding.keystrokes)
         keystrokesByCommand[binding.command] ?= []
         keystrokesByCommand[binding.command].unshift binding.keystrokes
 
       @sendToBrowserProcess(@template, keystrokesByCommand)
+    , 1)
 
   loadPlatformItems: ->
     if platformMenu?
@@ -172,26 +190,15 @@ class MenuManager
   unmerge: (menu, item) ->
     MenuHelpers.unmerge(menu, item)
 
-  # OSX can't handle displaying accelerators for multiple keystrokes.
-  # If they are sent across, it will stop processing accelerators for the rest
-  # of the menu items.
-  filterMultipleKeystroke: (keystrokesByCommand) ->
-    filtered = {}
-    for key, bindings of keystrokesByCommand
-      for binding in bindings
-        continue if binding.indexOf(' ') isnt -1
-
-        filtered[key] ?= []
-        filtered[key].push(binding)
-    filtered
-
   sendToBrowserProcess: (template, keystrokesByCommand) ->
-    keystrokesByCommand = @filterMultipleKeystroke(keystrokesByCommand)
-    ipc.send 'update-application-menu', template, keystrokesByCommand
+    ipcRenderer.send 'update-application-menu', template, keystrokesByCommand
 
   # Get an {Array} of {String} classes for the given element.
   classesForElement: (element) ->
-    element?.classList.toString().split(' ') ? []
+    if classList = element?.classList
+      Array::slice.apply(classList)
+    else
+      []
 
   sortPackagesMenu: ->
     packagesMenu = _.find @template, ({label}) -> MenuHelpers.normalizeLabel(label) is 'Packages'

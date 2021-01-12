@@ -1,6 +1,6 @@
 _ = require 'underscore-plus'
-{fork} = require 'child_process'
-{Emitter} = require 'emissary'
+ChildProcess = require 'child_process'
+{Emitter} = require 'event-kit'
 Grim = require 'grim'
 
 # Extended: Run a node script in a separate process.
@@ -38,8 +38,6 @@ Grim = require 'grim'
 # ```
 module.exports =
 class Task
-  Emitter.includeInto(this)
-
   # Public: A helper method to easily launch and run a task once.
   #
   # * `taskPath` The {String} path to the CoffeeScript/JavaScript file which
@@ -66,24 +64,13 @@ class Task
   # * `taskPath` The {String} path to the CoffeeScript/JavaScript file that
   #   exports a single {Function} to execute.
   constructor: (taskPath) ->
-    coffeeCacheRequire = "require('#{require.resolve('coffee-cash')}')"
-    coffeeCachePath = require('coffee-cash').getCacheDirectory()
-    coffeeStackRequire = "require('#{require.resolve('coffeestack')}')"
-    stackCachePath = require('coffeestack').getCacheDirectory()
-    taskBootstrapRequire = "require('#{require.resolve('./task-bootstrap')}');"
-    bootstrap = """
-      #{coffeeCacheRequire}.setCacheDirectory('#{coffeeCachePath}');
-      #{coffeeCacheRequire}.register();
-      #{coffeeStackRequire}.setCacheDirectory('#{stackCachePath}');
-      #{taskBootstrapRequire}
-    """
-    bootstrap = bootstrap.replace(/\\/g, "\\\\")
+    @emitter = new Emitter
 
+    compileCachePath = require('./compile-cache').getCacheDirectory()
     taskPath = require.resolve(taskPath)
-    taskPath = taskPath.replace(/\\/g, "\\\\")
 
-    env = _.extend({}, process.env, {taskPath, userAgent: navigator.userAgent})
-    @childProcess = fork '--eval', [bootstrap], {env, silent: true}
+    env = Object.assign({}, process.env, {userAgent: navigator.userAgent})
+    @childProcess = ChildProcess.fork require.resolve('./task-bootstrap'), [compileCachePath, taskPath], {env, silent: true}
 
     @on "task:log", -> console.log(arguments...)
     @on "task:warn", -> console.warn(arguments...)
@@ -97,15 +84,24 @@ class Task
 
   # Routes messages from the child to the appropriate event.
   handleEvents: ->
-    @childProcess.removeAllListeners()
+    # TodoElectronIssue: removeAllListeners() without arguments does not work on electron v3.
+    # Remove the argument when migrating to electron v4.
+    @childProcess.removeAllListeners('message')
     @childProcess.on 'message', ({event, args}) =>
-      @emit(event, args...) if @childProcess?
+      @emitter.emit(event, args) if @childProcess?
 
     # Catch the errors that happened before task-bootstrap.
-    @childProcess.stdout.removeAllListeners()
-    @childProcess.stdout.on 'data', (data) -> console.log data.toString()
-    @childProcess.stderr.removeAllListeners()
-    @childProcess.stderr.on 'data', (data) -> console.error data.toString()
+    if @childProcess.stdout?
+      # TodoElectronIssue: removeAllListeners() without arguments does not work on electron v3.
+      # Remove the argument when migrating to electron v4.
+      @childProcess.stdout.removeAllListeners('data')
+      @childProcess.stdout.on 'data', (data) -> console.log data.toString()
+
+    if @childProcess.stderr?
+      # TodoElectronIssue: removeAllListeners() without arguments does not work on electron v3.
+      # Remove the argument when migrating to electron v4.
+      @childProcess.stderr.removeAllListeners('data')
+      @childProcess.stderr.on 'data', (data) -> console.error data.toString()
 
   # Public: Starts the task.
   #
@@ -144,18 +140,34 @@ class Task
   # * `callback` The {Function} to call when the event is emitted.
   #
   # Returns a {Disposable} that can be used to stop listening for the event.
-  on: (eventName, callback) -> Emitter::on.call(this, eventName, callback)
+  on: (eventName, callback) -> @emitter.on eventName, (args) -> callback(args...)
+
+  once: (eventName, callback) ->
+    disposable = @on eventName, (args...) ->
+      disposable.dispose()
+      callback(args...)
 
   # Public: Forcefully stop the running task.
   #
   # No more events are emitted once this method is called.
   terminate: ->
-    return unless @childProcess?
+    return false unless @childProcess?
 
-    @childProcess.removeAllListeners()
-    @childProcess.stdout.removeAllListeners()
-    @childProcess.stderr.removeAllListeners()
+    # TodoElectronIssue: removeAllListeners() without arguments does not work on electron v3.
+    # Remove the argument when migrating to electron v4.
+    @childProcess.removeAllListeners('message')
+    @childProcess.stdout?.removeAllListeners('data')
+    @childProcess.stderr?.removeAllListeners('data')
     @childProcess.kill()
     @childProcess = null
 
-    undefined
+    true
+
+  # Public: Cancel the running task and emit an event if it was canceled.
+  #
+  # Returns a {Boolean} indicating whether the task was terminated.
+  cancel: ->
+    didForcefullyTerminate = @terminate()
+    if didForcefullyTerminate
+      @emitter.emit('task:cancelled')
+    didForcefullyTerminate

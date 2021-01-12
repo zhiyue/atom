@@ -1,11 +1,12 @@
-_ = require 'underscore-plus'
 path = require 'path'
 CSON = require 'season'
 fs = require 'fs-plus'
 {calculateSpecificity, validateSelector} = require 'clear-cut'
 {Disposable} = require 'event-kit'
-Grim = require 'grim'
+{remote} = require 'electron'
 MenuHelpers = require './menu-helpers'
+{sortMenuItems} = require './menu-sort-helpers'
+_ = require 'underscore-plus'
 
 platformContextMenu = require('../package.json')?._atomMenu?['context-menu']
 
@@ -41,15 +42,17 @@ platformContextMenu = require('../package.json')?._atomMenu?['context-menu']
 # {::add} for more information.
 module.exports =
 class ContextMenuManager
-  constructor: ({@resourcePath, @devMode}) ->
+  constructor: ({@keymapManager}) ->
     @definitions = {'.overlayer': []} # TODO: Remove once color picker package stops touching private data
     @clear()
 
-    atom.keymaps.onDidLoadBundledKeymaps => @loadPlatformItems()
+    @keymapManager.onDidLoadBundledKeymaps => @loadPlatformItems()
+
+  initialize: ({@resourcePath, @devMode}) ->
 
   loadPlatformItems: ->
     if platformContextMenu?
-      @add(platformContextMenu)
+      @add(platformContextMenu, @devMode ? false)
     else
       menusDirPath = path.join(@resourcePath, 'menus')
       platformMenuPath = fs.resolve(menusDirPath, process.platform, ['cson', 'json'])
@@ -83,52 +86,36 @@ class ContextMenuManager
   #
   # * `itemsBySelector` An {Object} whose keys are CSS selectors and whose
   #   values are {Array}s of item {Object}s containing the following keys:
-  #   * `label` (Optional) A {String} containing the menu item's label.
-  #   * `command` (Optional) A {String} containing the command to invoke on the
+  #   * `label` (optional) A {String} containing the menu item's label.
+  #   * `command` (optional) A {String} containing the command to invoke on the
   #     target of the right click that invoked the context menu.
-  #   * `submenu` (Optional) An {Array} of additional items.
-  #   * `type` (Optional) If you want to create a separator, provide an item
+  #   * `enabled` (optional) A {Boolean} indicating whether the menu item
+  #     should be clickable. Disabled menu items typically appear grayed out.
+  #     Defaults to `true`.
+  #   * `submenu` (optional) An {Array} of additional items.
+  #   * `type` (optional) If you want to create a separator, provide an item
   #      with `type: 'separator'` and no other keys.
-  #   * `created` (Optional) A {Function} that is called on the item each time a
+  #   * `visible` (optional) A {Boolean} indicating whether the menu item
+  #     should appear in the menu. Defaults to `true`.
+  #   * `created` (optional) A {Function} that is called on the item each time a
   #     context menu is created via a right click. You can assign properties to
   #    `this` to dynamically compute the command, label, etc. This method is
   #    actually called on a clone of the original item template to prevent state
   #    from leaking across context menu deployments. Called with the following
   #    argument:
   #     * `event` The click event that deployed the context menu.
-  #   * `shouldDisplay` (Optional) A {Function} that is called to determine
+  #   * `shouldDisplay` (optional) A {Function} that is called to determine
   #     whether to display this item on a given context menu deployment. Called
   #     with the following argument:
   #     * `event` The click event that deployed the context menu.
   #
   # Returns a {Disposable} on which `.dispose()` can be called to remove the
   # added menu items.
-  add: (itemsBySelector) ->
-    if Grim.includeDeprecatedAPIs
-      # Detect deprecated file path as first argument
-      if itemsBySelector? and typeof itemsBySelector isnt 'object'
-        Grim.deprecate """
-          `ContextMenuManager::add` has changed to take a single object as its
-          argument. Please see
-          https://atom.io/docs/api/latest/ContextMenuManager#context-menu-cson-format for more info.
-        """
-        itemsBySelector = arguments[1]
-        devMode = arguments[2]?.devMode
-
-      # Detect deprecated format for items object
-      for key, value of itemsBySelector
-        unless _.isArray(value)
-          Grim.deprecate """
-            `ContextMenuManager::add` has changed to take a single object as its
-            argument. Please see
-            https://atom.io/docs/api/latest/ContextMenuManager#context-menu-cson-format for more info.
-          """
-          itemsBySelector = @convertLegacyItemsBySelector(itemsBySelector, devMode)
-
+  add: (itemsBySelector, throwOnInvalidSelector = true) ->
     addedItemSets = []
 
     for selector, items of itemsBySelector
-      validateSelector(selector)
+      validateSelector(selector) if throwOnInvalidSelector
       itemSet = new ContextMenuItemSet(selector, items)
       addedItemSets.push(itemSet)
       @itemSets.push(itemSet)
@@ -152,60 +139,93 @@ class ContextMenuManager
 
       for itemSet in matchingItemSets
         for item in itemSet.items
-          continue if item.devMode and not @devMode
-          item = Object.create(item)
-          if typeof item.shouldDisplay is 'function'
-            continue unless item.shouldDisplay(event)
-          item.created?(event)
-          MenuHelpers.merge(currentTargetItems, item, itemSet.specificity)
+          itemForEvent = @cloneItemForEvent(item, event)
+          if itemForEvent
+            MenuHelpers.merge(currentTargetItems, itemForEvent, itemSet.specificity)
 
       for item in currentTargetItems
         MenuHelpers.merge(template, item, false)
 
       currentTarget = currentTarget.parentElement
 
-    template
+    @pruneRedundantSeparators(template)
+    @addAccelerators(template)
 
-  convertLegacyItemsBySelector: (legacyItemsBySelector, devMode) ->
-    itemsBySelector = {}
+    return @sortTemplate(template)
 
-    for selector, commandsByLabel of legacyItemsBySelector
-      itemsBySelector[selector] = @convertLegacyItems(commandsByLabel, devMode)
+  # Adds an `accelerator` property to items that have key bindings. Electron
+  # uses this property to surface the relevant keymaps in the context menu.
+  addAccelerators: (template) ->
+    for id, item of template
+      if item.command
+        keymaps = @keymapManager.findKeyBindings({command: item.command, target: document.activeElement})
+        keystrokes = keymaps?[0]?.keystrokes
+        if keystrokes
+          # Electron does not support multi-keystroke accelerators. Therefore,
+          # when the command maps to a multi-stroke key binding, show the
+          # keystrokes next to the item's label.
+          if keystrokes.includes(' ')
+            item.label += " [#{_.humanizeKeystroke(keystrokes)}]"
+          else
+            item.accelerator = MenuHelpers.acceleratorForKeystroke(keystrokes)
+      if Array.isArray(item.submenu)
+        @addAccelerators(item.submenu)
 
-    itemsBySelector
-
-  convertLegacyItems: (legacyItems, devMode) ->
-    items = []
-
-    for label, commandOrSubmenu of legacyItems
-      if typeof commandOrSubmenu is 'object'
-        items.push({label, submenu: @convertLegacyItems(commandOrSubmenu, devMode), devMode})
-      else if commandOrSubmenu is '-'
-        items.push({type: 'separator'})
+  pruneRedundantSeparators: (menu) ->
+    keepNextItemIfSeparator = false
+    index = 0
+    while index < menu.length
+      if menu[index].type is 'separator'
+        if not keepNextItemIfSeparator or index is menu.length - 1
+          menu.splice(index, 1)
+        else
+          index++
       else
-        items.push({label, command: commandOrSubmenu, devMode})
+        keepNextItemIfSeparator = true
+        index++
 
-    items
+  sortTemplate: (template) ->
+    template = sortMenuItems(template)
+    for id, item of template
+      if Array.isArray(item.submenu)
+        item.submenu = @sortTemplate(item.submenu)
+    return template
+
+  # Returns an object compatible with `::add()` or `null`.
+  cloneItemForEvent: (item, event) ->
+    return null if item.devMode and not @devMode
+    item = Object.create(item)
+    if typeof item.shouldDisplay is 'function'
+      return null unless item.shouldDisplay(event)
+    item.created?(event)
+    if Array.isArray(item.submenu)
+      item.submenu = item.submenu
+        .map((submenuItem) => @cloneItemForEvent(submenuItem, event))
+        .filter((submenuItem) -> submenuItem isnt null)
+    return item
 
   showForEvent: (event) ->
     @activeElement = event.target
     menuTemplate = @templateForEvent(event)
 
     return unless menuTemplate?.length > 0
-    atom.getCurrentWindow().emit('context-menu', menuTemplate)
+    remote.getCurrentWindow().emit('context-menu', menuTemplate)
     return
 
   clear: ->
     @activeElement = null
     @itemSets = []
-    @add 'atom-workspace': [{
-      label: 'Inspect Element'
-      command: 'application:inspect'
-      devMode: true
-      created: (event) ->
-        {pageX, pageY} = event
-        @commandDetail = {x: pageX, y: pageY}
-    }]
+    inspectElement = {
+      'atom-workspace': [{
+        label: 'Inspect Element'
+        command: 'application:inspect'
+        devMode: true
+        created: (event) ->
+          {pageX, pageY} = event
+          @commandDetail = {x: pageX, y: pageY}
+      }]
+    }
+    @add(inspectElement, false)
 
 class ContextMenuItemSet
   constructor: (@selector, @items) ->

@@ -1,210 +1,217 @@
 (function() {
+  // Define the window start time before the requires so we get a more accurate
+  // window:start marker.
+  const startWindowTime = Date.now();
 
-var fs = require('fs');
-var path = require('path');
+  const electron = require('electron');
+  const path = require('path');
+  const Module = require('module');
+  const getWindowLoadSettings = require('../src/get-window-load-settings');
+  const getReleaseChannel = require('../src/get-release-channel');
+  const StartupTime = require('../src/startup-time');
+  const entryPointDirPath = __dirname;
+  let blobStore = null;
+  let useSnapshot = false;
 
-var loadSettings = null;
-var loadSettingsError = null;
+  const startupMarkers = electron.remote.getCurrentWindow().startupMarkers;
 
-window.onload = function() {
-  try {
-    var startTime = Date.now();
-
-    process.on('unhandledRejection', function(error, promise) {
-      console.error('Unhandled promise rejection %o with error: %o', promise, error);
-    });
-
-    // Ensure ATOM_HOME is always set before anything else is required
-    setupAtomHome();
-
-    // Normalize to make sure drive letter case is consistent on Windows
-    process.resourcesPath = path.normalize(process.resourcesPath);
-
-    if (loadSettingsError) {
-      throw loadSettingsError;
-    }
-
-    var devMode = loadSettings.devMode || !loadSettings.resourcePath.startsWith(process.resourcesPath + path.sep);
-
-    if (loadSettings.profileStartup) {
-      profileStartup(loadSettings, Date.now() - startTime);
-    } else {
-      setupWindow(loadSettings);
-      setLoadTime(Date.now() - startTime);
-    }
-  } catch (error) {
-    handleSetupError(error);
+  if (startupMarkers) {
+    StartupTime.importData(startupMarkers);
   }
-}
+  StartupTime.addMarker('window:start', startWindowTime);
 
-var getCacheDirectory = function() {
-  var cacheDir = path.join(process.env.ATOM_HOME, 'compile-cache');
-  // Use separate compile cache when sudo'ing as root to avoid permission issues
-  if (process.env.USER === 'root' && process.env.SUDO_USER && process.env.SUDO_USER !== process.env.USER) {
-    cacheDir = path.join(cacheDir, 'root');
-  }
-  return cacheDir;
-}
-
-var setLoadTime = function(loadTime) {
-  if (global.atom) {
-    global.atom.loadTime = loadTime;
-    console.log('Window load time: ' + global.atom.getWindowLoadTime() + 'ms');
-  }
-}
-
-var handleSetupError = function(error) {
-  var currentWindow = require('remote').getCurrentWindow();
-  currentWindow.setSize(800, 600);
-  currentWindow.center();
-  currentWindow.show();
-  currentWindow.openDevTools();
-  console.error(error.stack || error);
-}
-
-var setupWindow = function(loadSettings) {
-  var cacheDir = getCacheDirectory();
-
-  setupCoffeeCache(cacheDir);
-
-  ModuleCache = require('../src/module-cache');
-  ModuleCache.register(loadSettings);
-  ModuleCache.add(loadSettings.resourcePath);
-
-  require('grim').includeDeprecatedAPIs = !!loadSettings.includeDeprecatedAPIs;
-
-  // Start the crash reporter before anything else.
-  require('crash-reporter').start({
-    productName: 'Atom',
-    companyName: 'GitHub',
-    // By explicitly passing the app version here, we could save the call
-    // of "require('remote').require('app').getVersion()".
-    extra: {_version: loadSettings.appVersion}
-  });
-
-  setupVmCompatibility();
-  setupCsonCache(cacheDir);
-  setupSourceMapCache(cacheDir);
-  setupBabel(cacheDir);
-  setupTypeScript(cacheDir);
-
-  require(loadSettings.bootstrapScript);
-  require('ipc').sendChannel('window-command', 'window:loaded');
-}
-
-var setupCoffeeCache = function(cacheDir) {
-  var CoffeeCache = require('coffee-cash');
-  CoffeeCache.setCacheDirectory(path.join(cacheDir, 'coffee'));
-  CoffeeCache.register();
-}
-
-var setupAtomHome = function() {
-  if (!process.env.ATOM_HOME) {
-    var home;
-    if (process.platform === 'win32') {
-      home = process.env.USERPROFILE;
-    } else {
-      home = process.env.HOME;
-    }
-    var atomHome = path.join(home, '.atom');
+  window.onload = function() {
     try {
-      atomHome = fs.realpathSync(atomHome);
-    } catch (error) {
-      // Ignore since the path might just not exist yet.
-    }
-    process.env.ATOM_HOME = atomHome;
-  }
-}
+      StartupTime.addMarker('window:onload:start');
+      const startTime = Date.now();
 
-var setupBabel = function(cacheDir) {
-  var babel = require('../src/babel');
-  babel.setCacheDirectory(path.join(cacheDir, 'js', 'babel'));
-  babel.register();
-}
+      process.on('unhandledRejection', function(error, promise) {
+        console.error(
+          'Unhandled promise rejection %o with error: %o',
+          promise,
+          error
+        );
+      });
 
-var setupTypeScript = function(cacheDir) {
-  var typescript = require('../src/typescript');
-  typescript.setCacheDirectory(path.join(cacheDir, 'typescript'));
-  typescript.register();
-}
+      // Normalize to make sure drive letter case is consistent on Windows
+      process.resourcesPath = path.normalize(process.resourcesPath);
 
-var setupCsonCache = function(cacheDir) {
-  require('season').setCacheDir(path.join(cacheDir, 'cson'));
-}
+      setupAtomHome();
+      const devMode =
+        getWindowLoadSettings().devMode ||
+        !getWindowLoadSettings().resourcePath.startsWith(
+          process.resourcesPath + path.sep
+        );
+      useSnapshot = !devMode && typeof snapshotResult !== 'undefined';
 
-var setupSourceMapCache = function(cacheDir) {
-  require('coffeestack').setCacheDirectory(path.join(cacheDir, 'coffee', 'source-maps'));
-}
+      if (devMode) {
+        const metadata = require('../package.json');
+        if (!metadata._deprecatedPackages) {
+          try {
+            metadata._deprecatedPackages = require('../script/deprecated-packages.json');
+          } catch (requireError) {
+            console.error(
+              'Failed to setup deprecated packages list',
+              requireError.stack
+            );
+          }
+        }
+      } else if (useSnapshot) {
+        Module.prototype.require = function(module) {
+          const absoluteFilePath = Module._resolveFilename(module, this, false);
+          let relativeFilePath = path.relative(
+            entryPointDirPath,
+            absoluteFilePath
+          );
+          if (process.platform === 'win32') {
+            relativeFilePath = relativeFilePath.replace(/\\/g, '/');
+          }
+          let cachedModule =
+            snapshotResult.customRequire.cache[relativeFilePath];
+          if (!cachedModule) {
+            cachedModule = { exports: Module._load(module, this, false) };
+            snapshotResult.customRequire.cache[relativeFilePath] = cachedModule;
+          }
+          return cachedModule.exports;
+        };
 
-var setupVmCompatibility = function() {
-  var vm = require('vm');
-  if (!vm.Script.createContext) {
-    vm.Script.createContext = vm.createContext;
-  }
-}
+        snapshotResult.setGlobals(
+          global,
+          process,
+          window,
+          document,
+          console,
+          require
+        );
+      }
 
-var profileStartup = function(loadSettings, initialTime) {
-  var profile = function() {
-    console.profile('startup');
-    try {
-      var startTime = Date.now()
-      setupWindow(loadSettings);
-      setLoadTime(Date.now() - startTime + initialTime);
+      const FileSystemBlobStore = useSnapshot
+        ? snapshotResult.customRequire('../src/file-system-blob-store.js')
+        : require('../src/file-system-blob-store');
+      blobStore = FileSystemBlobStore.load(
+        path.join(process.env.ATOM_HOME, 'blob-store')
+      );
+
+      const NativeCompileCache = useSnapshot
+        ? snapshotResult.customRequire('../src/native-compile-cache.js')
+        : require('../src/native-compile-cache');
+      NativeCompileCache.setCacheStore(blobStore);
+      NativeCompileCache.setV8Version(process.versions.v8);
+      NativeCompileCache.install();
+
+      if (getWindowLoadSettings().profileStartup) {
+        profileStartup(Date.now() - startTime);
+      } else {
+        StartupTime.addMarker('window:setup-window:start');
+        setupWindow().then(() => {
+          StartupTime.addMarker('window:setup-window:end');
+        });
+        setLoadTime(Date.now() - startTime);
+      }
     } catch (error) {
       handleSetupError(error);
-    } finally {
-      console.profileEnd('startup');
-      console.log("Switch to the Profiles tab to view the created startup profile")
     }
+    StartupTime.addMarker('window:onload:end');
   };
 
-  var currentWindow = require('remote').getCurrentWindow();
-  if (currentWindow.devToolsWebContents) {
-    profile();
-  } else {
+  function setLoadTime(loadTime) {
+    if (global.atom) {
+      global.atom.loadTime = loadTime;
+    }
+  }
+
+  function handleSetupError(error) {
+    const currentWindow = electron.remote.getCurrentWindow();
+    currentWindow.setSize(800, 600);
+    currentWindow.center();
+    currentWindow.show();
     currentWindow.openDevTools();
-    currentWindow.once('devtools-opened', function() {
-      setTimeout(profile, 100);
+    console.error(error.stack || error);
+  }
+
+  function setupWindow() {
+    const CompileCache = useSnapshot
+      ? snapshotResult.customRequire('../src/compile-cache.js')
+      : require('../src/compile-cache');
+    CompileCache.setAtomHomeDirectory(process.env.ATOM_HOME);
+    CompileCache.install(process.resourcesPath, require);
+
+    const ModuleCache = useSnapshot
+      ? snapshotResult.customRequire('../src/module-cache.js')
+      : require('../src/module-cache');
+    ModuleCache.register(getWindowLoadSettings());
+
+    const startCrashReporter = useSnapshot
+      ? snapshotResult.customRequire('../src/crash-reporter-start.js')
+      : require('../src/crash-reporter-start');
+
+    const { userSettings, appVersion } = getWindowLoadSettings();
+    const uploadToServer =
+      userSettings &&
+      userSettings.core &&
+      userSettings.core.telemetryConsent === 'limited';
+    const releaseChannel = getReleaseChannel(appVersion);
+
+    startCrashReporter({
+      uploadToServer,
+      releaseChannel
+    });
+
+    const CSON = useSnapshot
+      ? snapshotResult.customRequire('../node_modules/season/lib/cson.js')
+      : require('season');
+    CSON.setCacheDir(path.join(CompileCache.getCacheDirectory(), 'cson'));
+
+    const initScriptPath = path.relative(
+      entryPointDirPath,
+      getWindowLoadSettings().windowInitializationScript
+    );
+    const initialize = useSnapshot
+      ? snapshotResult.customRequire(initScriptPath)
+      : require(initScriptPath);
+
+    StartupTime.addMarker('window:initialize:start');
+
+    return initialize({ blobStore: blobStore }).then(function() {
+      StartupTime.addMarker('window:initialize:end');
+      electron.ipcRenderer.send('window-command', 'window:loaded');
     });
   }
-}
 
-var parseLoadSettings = function() {
-  var rawLoadSettings = decodeURIComponent(location.hash.substr(1));
-  try {
-    loadSettings = JSON.parse(rawLoadSettings);
-  } catch (error) {
-    console.error("Failed to parse load settings: " + rawLoadSettings);
-    loadSettingsError = error;
+  function profileStartup(initialTime) {
+    function profile() {
+      console.profile('startup');
+      const startTime = Date.now();
+      setupWindow().then(function() {
+        setLoadTime(Date.now() - startTime + initialTime);
+        console.profileEnd('startup');
+        console.log(
+          'Switch to the Profiles tab to view the created startup profile'
+        );
+      });
+    }
+
+    const webContents = electron.remote.getCurrentWindow().webContents;
+    if (webContents.devToolsWebContents) {
+      profile();
+    } else {
+      webContents.once('devtools-opened', () => {
+        setTimeout(profile, 1000);
+      });
+      webContents.openDevTools();
+    }
   }
-}
 
-var setupWindowBackground = function() {
-  if (loadSettings && loadSettings.isSpec) {
-    return;
+  function setupAtomHome() {
+    if (process.env.ATOM_HOME) {
+      return;
+    }
+
+    // Ensure ATOM_HOME is always set before anything else is required
+    // This is because of a difference in Linux not inherited between browser and render processes
+    // https://github.com/atom/atom/issues/5412
+    if (getWindowLoadSettings() && getWindowLoadSettings().atomHome) {
+      process.env.ATOM_HOME = getWindowLoadSettings().atomHome;
+    }
   }
-
-  var backgroundColor = window.localStorage.getItem('atom:window-background-color');
-  if (!backgroundColor) {
-    return;
-  }
-
-  var backgroundStylesheet = document.createElement('style');
-  backgroundStylesheet.type = 'text/css';
-  backgroundStylesheet.innerText = 'html, body { background: ' + backgroundColor + '; }';
-  document.head.appendChild(backgroundStylesheet);
-
-  // Remove once the page loads
-  window.addEventListener("load", function loadWindow() {
-    window.removeEventListener("load", loadWindow, false);
-    setTimeout(function() {
-      backgroundStylesheet.remove();
-      backgroundStylesheet = null;
-    }, 1000);
-  }, false);
-}
-
-parseLoadSettings();
-setupWindowBackground();
-
 })();

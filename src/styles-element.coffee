@@ -1,5 +1,4 @@
 {Emitter, CompositeDisposable} = require 'event-kit'
-{includeDeprecatedAPIs} = require 'grim'
 
 class StylesElement extends HTMLElement
   subscriptions: null
@@ -15,38 +14,33 @@ class StylesElement extends HTMLElement
     @emitter.on 'did-update-style-element', callback
 
   createdCallback: ->
+    @subscriptions = new CompositeDisposable
     @emitter = new Emitter
     @styleElementClonesByOriginalElement = new WeakMap
 
   attachedCallback: ->
-    if includeDeprecatedAPIs and @context is 'atom-text-editor'
-      for styleElement in @children
-        @upgradeDeprecatedSelectors(styleElement)
-    @initialize()
+    @context = @getAttribute('context') ? undefined
 
   detachedCallback: ->
     @subscriptions.dispose()
-    @subscriptions = null
+    @subscriptions = new CompositeDisposable
 
   attributeChangedCallback: (attrName, oldVal, newVal) ->
     @contextChanged() if attrName is 'context'
 
-  initialize: ->
-    return if @subscriptions?
+  initialize: (@styleManager) ->
+    throw new Error("Must pass a styleManager parameter when initializing a StylesElement") unless @styleManager?
 
-    @subscriptions = new CompositeDisposable
-    @context = @getAttribute('context') ? undefined
-
-    @subscriptions.add atom.styles.observeStyleElements(@styleElementAdded.bind(this))
-    @subscriptions.add atom.styles.onDidRemoveStyleElement(@styleElementRemoved.bind(this))
-    @subscriptions.add atom.styles.onDidUpdateStyleElement(@styleElementUpdated.bind(this))
+    @subscriptions.add @styleManager.observeStyleElements(@styleElementAdded.bind(this))
+    @subscriptions.add @styleManager.onDidRemoveStyleElement(@styleElementRemoved.bind(this))
+    @subscriptions.add @styleManager.onDidUpdateStyleElement(@styleElementUpdated.bind(this))
 
   contextChanged: ->
     return unless @subscriptions?
 
     @styleElementRemoved(child) for child in Array::slice.call(@children)
     @context = @getAttribute('context')
-    @styleElementAdded(styleElement) for styleElement in atom.styles.getStyleElements()
+    @styleElementAdded(styleElement) for styleElement in @styleManager.getStyleElements()
     return
 
   styleElementAdded: (styleElement) ->
@@ -66,10 +60,6 @@ class StylesElement extends HTMLElement
           break
 
     @insertBefore(styleElementClone, insertBefore)
-
-    if includeDeprecatedAPIs and @context is 'atom-text-editor'
-      @upgradeDeprecatedSelectors(styleElementClone)
-
     @emitter.emit 'did-add-style-element', styleElementClone
 
   styleElementRemoved: (styleElement) ->
@@ -88,32 +78,5 @@ class StylesElement extends HTMLElement
 
   styleElementMatchesContext: (styleElement) ->
     not @context? or styleElement.context is @context
-
-  upgradeDeprecatedSelectors: (styleElement) ->
-    return unless styleElement.sheet?
-
-    upgradedSelectors = []
-
-    for rule in styleElement.sheet.cssRules
-      continue unless rule.selectorText?
-      continue if /\:host/.test(rule.selectorText)
-
-      inputSelector = rule.selectorText
-      outputSelector = rule.selectorText
-        .replace(/\.editor-colors($|[ >])/g, ':host$1')
-        .replace(/\.editor([:.][^ ,>]+)/g, ':host($1)')
-        .replace(/\.editor($|[ ,>])/g, ':host$1')
-
-      unless inputSelector is outputSelector
-        rule.selectorText = outputSelector
-        upgradedSelectors.push({inputSelector, outputSelector})
-
-    if upgradedSelectors.length > 0
-      warning = "Upgraded the following syntax theme selectors in `#{styleElement.sourcePath}` for shadow DOM compatibility:\n\n"
-      for {inputSelector, outputSelector} in upgradedSelectors
-        warning += "`#{inputSelector}` => `#{outputSelector}`\n"
-
-      warning += "\nSee the upgrade guide for information on removing this warning."
-      console.warn(warning)
 
 module.exports = StylesElement = document.registerElement 'atom-styles', prototype: StylesElement.prototype

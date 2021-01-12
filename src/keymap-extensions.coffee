@@ -2,27 +2,32 @@ fs = require 'fs-plus'
 path = require 'path'
 KeymapManager = require 'atom-keymap'
 CSON = require 'season'
-{jQuery} = require 'space-pen'
-Grim = require 'grim'
 
 bundledKeymaps = require('../package.json')?._atomKeymaps
 
 KeymapManager::onDidLoadBundledKeymaps = (callback) ->
   @emitter.on 'did-load-bundled-keymaps', callback
 
+KeymapManager::onDidLoadUserKeymap = (callback) ->
+  @emitter.on 'did-load-user-keymap', callback
+
+KeymapManager::canLoadBundledKeymapsFromMemory = ->
+  bundledKeymaps?
+
 KeymapManager::loadBundledKeymaps = ->
-  keymapsPath = path.join(@resourcePath, 'keymaps')
   if bundledKeymaps?
     for keymapName, keymap of bundledKeymaps
-      keymapPath = path.join(keymapsPath, keymapName)
-      @add(keymapPath, keymap)
+      keymapPath = "core:#{keymapName}"
+      @add(keymapPath, keymap, 0, @devMode ? false)
   else
+    keymapsPath = path.join(@resourcePath, 'keymaps')
     @loadKeymap(keymapsPath)
 
-  @emit 'bundled-keymaps-loaded' if Grim.includeDeprecatedAPIs
   @emitter.emit 'did-load-bundled-keymaps'
 
 KeymapManager::getUserKeymapPath = ->
+  return "" unless @configDirPath?
+
   if userKeymapPath = CSON.resolve(path.join(@configDirPath, 'keymap'))
     userKeymapPath
   else
@@ -33,7 +38,7 @@ KeymapManager::loadUserKeymap = ->
   return unless fs.isFileSync(userKeymapPath)
 
   try
-    @loadKeymap(userKeymapPath, watch: true, suppressErrors: true)
+    @loadKeymap(userKeymapPath, watch: true, suppressErrors: true, priority: 100)
   catch error
     if error.message.indexOf('Unable to watch path') > -1
       message = """
@@ -44,11 +49,14 @@ KeymapManager::loadUserKeymap = ->
         [this document][watches] for more info.
         [watches]:https://github.com/atom/atom/blob/master/docs/build-instructions/linux.md#typeerror-unable-to-watch-path
       """
-      atom.notifications.addError(message, {dismissable: true})
+      @notificationManager.addError(message, {dismissable: true})
     else
       detail = error.path
       stack = error.stack
-      atom.notifications.addFatalError(error.message, {detail, stack, dismissable: true})
+      @notificationManager.addFatalError(error.message, {detail, stack, dismissable: true})
+
+  @emitter.emit 'did-load-user-keymap'
+
 
 KeymapManager::subscribeToFileReadFailure = ->
   @onDidFailToReadFile (error) =>
@@ -60,11 +68,6 @@ KeymapManager::subscribeToFileReadFailure = ->
     else
       error.message
 
-    atom.notifications.addError(message, {detail, dismissable: true})
-
-# This enables command handlers registered via jQuery to call
-# `.abortKeyBinding()` on the `jQuery.Event` object passed to the handler.
-jQuery.Event::abortKeyBinding = ->
-  @originalEvent?.abortKeyBinding?()
+    @notificationManager.addError(message, {detail, dismissable: true})
 
 module.exports = KeymapManager
